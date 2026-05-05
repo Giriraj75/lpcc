@@ -1,329 +1,335 @@
-#ThreeAddressCode.java
+#ThreeAddressCode.py
 
-import java.util.*;
+import sys
+from enum import Enum
 
-/**
- * Three Address Code (TAC) Generator
- * Assignment No. 5 - Language Processors and Compiler Construction
- * Supports: arithmetic expressions and if-statements
- */
-public class ThreeAddressCode {
+# ──────────────────────────────────────────────
+# Token Types
+# ──────────────────────────────────────────────
+class TokenType(Enum):
+    NUMBER = 1
+    ID     = 2
+    ASSIGN = 3
+    RELOP  = 4
+    PLUS   = 5
+    MINUS  = 6
+    MUL    = 7
+    DIV    = 8
+    LPAREN = 9
+    RPAREN = 10
+    SEMI   = 11
+    EOF    = 12
 
-    // ──────────────────────────────────────────────
-    // Token Types
-    // ──────────────────────────────────────────────
-    enum TokenType {
-        NUMBER, ID, ASSIGN, RELOP, PLUS, MINUS, MUL, DIV,
-        LPAREN, RPAREN, SEMI, EOF
-    }
+class Token:
+    def __init__(self, type_obj, value):
+        self.type  = type_obj
+        self.value = value
 
-    static class Token {
-        TokenType type;
-        String    value;
-        Token(TokenType type, String value) {
-            this.type  = type;
-            this.value = value;
-        }
-        public String toString() { return "(" + type + ", " + value + ")"; }
-    }
+    def __str__(self):
+        return "(" + str(self.type.name) + ", " + self.value + ")"
 
-    // ──────────────────────────────────────────────
-    // Lexer
-    // ──────────────────────────────────────────────
-    static class Lexer {
-        private final String   input;
-        private       int      pos = 0;
+# ──────────────────────────────────────────────
+# Three Address Code (TAC) Generator
+# Assignment No. 5 - Language Processors and Compiler Construction
+# Supports: arithmetic expressions and if-statements
+# ──────────────────────────────────────────────
+class ThreeAddressCode:
 
-        Lexer(String input) { this.input = input.trim(); }
+    # ──────────────────────────────────────────────
+    # Lexer
+    # ──────────────────────────────────────────────
+    class Lexer:
+        def __init__(self, input_str):
+            self.input = input_str.strip()
+            self.pos   = 0
 
-        private char peek() {
-            return pos < input.length() ? input.charAt(pos) : '\0';
-        }
-        private char advance() { return input.charAt(pos++); }
+        def peek(self):
+            return self.input[self.pos] if self.pos < len(self.input) else '\0'
 
-        List<Token> tokenize() {
-            List<Token> tokens = new ArrayList<>();
-            while (pos < input.length()) {
-                char c = peek();
-                if (Character.isWhitespace(c)) { advance(); continue; }
+        def advance(self):
+            char = self.input[self.pos]
+            self.pos += 1
+            return char
 
-                if (Character.isDigit(c)) {
-                    StringBuilder sb = new StringBuilder();
-                    while (pos < input.length() && (Character.isDigit(peek()) || peek() == '.'))
-                        sb.append(advance());
-                    tokens.add(new Token(TokenType.NUMBER, sb.toString()));
-                    continue;
-                }
-                if (Character.isLetter(c) || c == '_') {
-                    StringBuilder sb = new StringBuilder();
-                    while (pos < input.length() && (Character.isLetterOrDigit(peek()) || peek() == '_'))
-                        sb.append(advance());
-                    tokens.add(new Token(TokenType.ID, sb.toString()));
-                    continue;
-                }
-                // Two-char operators
-                if (pos + 1 < input.length()) {
-                    String two = "" + c + input.charAt(pos + 1);
-                    if (two.equals(":=")) { pos += 2; tokens.add(new Token(TokenType.ASSIGN, ":=")); continue; }
-                    if (two.equals("<=") || two.equals(">=") || two.equals("==") || two.equals("!=")) {
-                        pos += 2; tokens.add(new Token(TokenType.RELOP, two)); continue;
-                    }
-                }
-                // Single-char
-                advance();
-                switch (c) {
-                    case '=': tokens.add(new Token(TokenType.ASSIGN, "=")); break;
-                    case '<': tokens.add(new Token(TokenType.RELOP,  "<")); break;
-                    case '>': tokens.add(new Token(TokenType.RELOP,  ">")); break;
-                    case '+': tokens.add(new Token(TokenType.PLUS,   "+")); break;
-                    case '-': tokens.add(new Token(TokenType.MINUS,  "-")); break;
-                    case '*': tokens.add(new Token(TokenType.MUL,    "*")); break;
-                    case '/': tokens.add(new Token(TokenType.DIV,    "/")); break;
-                    case '(': tokens.add(new Token(TokenType.LPAREN, "(")); break;
-                    case ')': tokens.add(new Token(TokenType.RPAREN, ")")); break;
-                    case ';': tokens.add(new Token(TokenType.SEMI,   ";")); break;
-                    default : throw new RuntimeException("Unexpected character: " + c);
-                }
-            }
-            tokens.add(new Token(TokenType.EOF, ""));
-            return tokens;
-        }
-    }
+        def tokenize(self):
+            tokens = []
+            while self.pos < len(self.input):
+                c = self.peek()
+                if c.isspace():
+                    self.advance()
+                    continue
 
-    // ──────────────────────────────────────────────
-    // TAC Generator (Recursive-Descent Parser)
-    // ──────────────────────────────────────────────
-    static class Generator {
-        private final List<Token>  tokens;
-        private       int          pos    = 0;
-        private       int          tempCnt = 0;
-        private       int          lineNo  = 1;
+                if c.isdigit():
+                    sb = []
+                    while self.pos < len(self.input) and (self.peek().isdigit() or self.peek() == '.'):
+                        sb.append(self.advance())
+                    tokens.append(Token(TokenType.NUMBER, "".join(sb)))
+                    continue
 
-        // Each entry: [lineNumber, instruction]
-        private final List<String[]> code = new ArrayList<>();
+                if c.isalpha() or c == '_':
+                    sb = []
+                    while self.pos < len(self.input) and (self.peek().isalnum() or self.peek() == '_'):
+                        sb.append(self.advance())
+                    tokens.append(Token(TokenType.ID, "".join(sb)))
+                    continue
 
-        Generator(List<Token> tokens) { this.tokens = tokens; }
+                # Two-char operators
+                if self.pos + 1 < len(self.input):
+                    two = c + self.input[self.pos + 1]
+                    if two == ":=":
+                        self.pos += 2
+                        tokens.append(Token(TokenType.ASSIGN, ":="))
+                        continue
+                    if two in ["<=", ">=", "==", "!="]:
+                        self.pos += 2
+                        tokens.append(Token(TokenType.RELOP, two))
+                        continue
 
-        // ── helpers ──────────────────────────────
-        private String newTemp() { return "t" + (++tempCnt); }
+                # Single-char
+                self.advance()
+                if c == '=':
+                    tokens.append(Token(TokenType.ASSIGN, "="))
+                elif c == '<':
+                    tokens.append(Token(TokenType.RELOP,  "<"))
+                elif c == '>':
+                    tokens.append(Token(TokenType.RELOP,  ">"))
+                elif c == '+':
+                    tokens.append(Token(TokenType.PLUS,   "+"))
+                elif c == '-':
+                    tokens.append(Token(TokenType.MINUS,  "-"))
+                elif c == '*':
+                    tokens.append(Token(TokenType.MUL,    "*"))
+                elif c == '/':
+                    tokens.append(Token(TokenType.DIV,    "/"))
+                elif c == '(':
+                    tokens.append(Token(TokenType.LPAREN, "("))
+                elif c == ')':
+                    tokens.append(Token(TokenType.RPAREN, ")"))
+                elif c == ';':
+                    tokens.append(Token(TokenType.SEMI,   ";"))
+                else:
+                    raise RuntimeError("Unexpected character: " + c)
 
-        private Token peek() { return tokens.get(pos); }
+            tokens.append(Token(TokenType.EOF, ""))
+            return tokens
 
-        private Token consume() { return tokens.get(pos++); }
+    # ──────────────────────────────────────────────
+    # TAC Generator (Recursive-Descent Parser)
+    # ──────────────────────────────────────────────
+    class Generator:
+        def __init__(self, tokens):
+            self.tokens  = tokens
+            self.pos     = 0
+            self.tempCnt = 0
+            self.lineNo  = 1
+            # Each entry: [lineNumber, instruction]
+            self.code    = []
 
-        private Token consume(TokenType expected) {
-            Token t = tokens.get(pos++);
-            if (t.type != expected)
-                throw new RuntimeException("Expected " + expected + " but got " + t);
-            return t;
-        }
+        # ── helpers ──────────────────────────────
+        def newTemp(self):
+            self.tempCnt += 1
+            return "t" + str(self.tempCnt)
 
-        private void emit(String instr) {
-            code.add(new String[]{ String.valueOf(lineNo++), instr });
-        }
+        def peek(self):
+            return self.tokens[self.pos]
 
-        // Returns index into code list (before emit)
-        private int nextIndex() { return code.size(); }
+        def consume(self, expected=None):
+            t = self.tokens[self.pos]
+            self.pos += 1
+            if expected is not None and t.type != expected:
+                raise RuntimeError("Expected " + str(expected.name) + " but got " + str(t))
+            return t
 
-        // Patch a previously emitted instruction
-        private void patch(int idx, String newInstr) {
-            code.get(idx)[1] = newInstr;
-        }
+        def emit(self, instr):
+            self.code.append([str(self.lineNo), instr])
+            self.lineNo += 1
 
-        // ── parse entry ──────────────────────────
-        void parse() {
-            while (peek().type != TokenType.EOF)
-                statement();
-        }
+        # Returns index into code list (before emit)
+        def nextIndex(self):
+            return len(self.code)
 
-        private void statement() {
-            Token t = peek();
-            if (t.type == TokenType.ID && t.value.equals("if"))
-                ifStmt();
-            else
-                assignStmt();
-        }
+        # Patch a previously emitted instruction
+        def patch(self, idx, newInstr):
+            self.code[idx][1] = newInstr
 
-        // if '(' expr ')' assignStmt (';' assignStmt)*
-        private void ifStmt() {
-            consume(); // 'if'
-            consume(TokenType.LPAREN);
-            String cond = expr();
-            consume(TokenType.RPAREN);
+        # ── parse entry ──────────────────────────
+        def parse(self):
+            while self.peek().type != TokenType.EOF:
+                self.statement()
 
-            int trueIdx  = nextIndex();
-            emit("if " + cond + " goto (?)");   // placeholder
-            int falseIdx = nextIndex();
-            emit("goto (?)");                    // placeholder
+        def statement(self):
+            t = self.peek()
+            if t.type == TokenType.ID and t.value == "if":
+                self.ifStmt()
+            else:
+                self.assignStmt()
 
-            int trueStart = lineNo;
-            assignStmt();
-            while (peek().type == TokenType.SEMI) {
-                consume(); // ';'
-                // check if next is an assignment
-                if (peek().type == TokenType.ID) {
-                    int saved = pos;
-                    consume(); // ID
-                    boolean isAssign = peek().type == TokenType.ASSIGN;
-                    pos = saved;
-                    if (isAssign) assignStmt();
-                }
-            }
+        # if '(' expr ')' assignStmt (';' assignStmt)*
+        def ifStmt(self):
+            self.consume() # 'if'
+            self.consume(TokenType.LPAREN)
+            cond = self.expr()
+            self.consume(TokenType.RPAREN)
 
-            int afterLine = lineNo;
-            patch(trueIdx,  "if " + cond + " goto (" + trueStart + ")");
-            patch(falseIdx, "goto (" + afterLine + ")");
-        }
+            trueIdx  = self.nextIndex()
+            self.emit("if " + cond + " goto (?)")   # placeholder
+            falseIdx = self.nextIndex()
+            self.emit("goto (?)")                    # placeholder
 
-        // ID ('='|':=') expr ';'?
-        private void assignStmt() {
-            String lhs = consume(TokenType.ID).value;
-            consume(TokenType.ASSIGN);
-            String rhs = expr();
-            if (peek().type == TokenType.SEMI) consume();
-            emit(lhs + " = " + rhs);
-        }
+            trueStart = self.lineNo
+            self.assignStmt()
+            while self.peek().type == TokenType.SEMI:
+                self.consume() # ';'
+                # check if next is an assignment
+                if self.peek().type == TokenType.ID:
+                    saved = self.pos
+                    self.consume() # ID
+                    isAssign = self.peek().type == TokenType.ASSIGN
+                    self.pos = saved
+                    if isAssign:
+                        self.assignStmt()
 
-        // additive (RELOP additive)?
-        private String expr() {
-            String left = additive();
-            if (peek().type == TokenType.RELOP) {
-                String op    = consume().value;
-                String right = additive();
-                String t     = newTemp();
-                emit(t + " = " + left + " " + op + " " + right);
-                left = t;
-            }
-            return left;
-        }
+            afterLine = self.lineNo
+            self.patch(trueIdx,  "if " + cond + " goto (" + str(trueStart) + ")")
+            self.patch(falseIdx, "goto (" + str(afterLine) + ")")
 
-        // term (('+' | '-') term)*
-        private String additive() {
-            String left = term();
-            while (peek().type == TokenType.PLUS || peek().type == TokenType.MINUS) {
-                String op    = consume().value;
-                String right = term();
-                String t     = newTemp();
-                emit(t + " = " + left + " " + op + " " + right);
-                left = t;
-            }
-            return left;
-        }
+        # ID ('='|':=') expr ';'?
+        def assignStmt(self):
+            lhs = self.consume(TokenType.ID).value
+            self.consume(TokenType.ASSIGN)
+            rhs = self.expr()
+            if self.peek().type == TokenType.SEMI:
+                self.consume()
+            self.emit(lhs + " = " + rhs)
 
-        // unary (('*' | '/') unary)*
-        private String term() {
-            String left = unary();
-            while (peek().type == TokenType.MUL || peek().type == TokenType.DIV) {
-                String op    = consume().value;
-                String right = unary();
-                String t     = newTemp();
-                emit(t + " = " + left + " " + op + " " + right);
-                left = t;
-            }
-            return left;
-        }
+        # additive (RELOP additive)?
+        def expr(self):
+            left = self.additive()
+            if self.peek().type == TokenType.RELOP:
+                op    = self.consume().value
+                right = self.additive()
+                t     = self.newTemp()
+                self.emit(t + " = " + left + " " + op + " " + right)
+                left = t
+            return left
 
-        // '-' unary | factor
-        private String unary() {
-            if (peek().type == TokenType.MINUS) {
-                consume();
-                String operand = unary();
-                String t = newTemp();
-                emit(t + " = - " + operand);
-                return t;
-            }
-            return factor();
-        }
+        # term (('+' | '-') term)*
+        def additive(self):
+            left = self.term()
+            while self.peek().type == TokenType.PLUS or self.peek().type == TokenType.MINUS:
+                op    = self.consume().value
+                right = self.term()
+                t     = self.newTemp()
+                self.emit(t + " = " + left + " " + op + " " + right)
+                left = t
+            return left
 
-        // '(' expr ')' | NUMBER | ID
-        private String factor() {
-            Token t = peek();
-            if (t.type == TokenType.LPAREN) {
-                consume();
-                String v = expr();
-                consume(TokenType.RPAREN);
-                return v;
-            } else if (t.type == TokenType.NUMBER || t.type == TokenType.ID) {
-                return consume().value;
-            }
-            throw new RuntimeException("Unexpected token: " + t);
-        }
+        # unary (('*' | '/') unary)*
+        def term(self):
+            left = self.unary()
+            while self.peek().type == TokenType.MUL or self.peek().type == TokenType.DIV:
+                op    = self.consume().value
+                right = self.unary()
+                t     = self.newTemp()
+                self.emit(t + " = " + left + " " + op + " " + right)
+                left = t
+            return left
 
-        String getCode() {
-            StringBuilder sb = new StringBuilder();
-            for (String[] entry : code)
-                sb.append(entry[0]).append(") ").append(entry[1]).append("\n");
-            return sb.toString().trim();
-        }
-    }
+        # '-' unary | factor
+        def unary(self):
+            if self.peek().type == TokenType.MINUS:
+                self.consume()
+                operand = self.unary()
+                t = self.newTemp()
+                self.emit(t + " = - " + operand)
+                return t
+            return self.factor()
 
-    // ──────────────────────────────────────────────
-    // Helper: generate TAC from source string
-    // ──────────────────────────────────────────────
-    static String generateTAC(String source) {
-        List<Token> tokens = new Lexer(source).tokenize();
-        Generator   gen    = new Generator(tokens);
-        gen.parse();
-        return gen.getCode();
-    }
+        # '(' expr ')' | NUMBER | ID
+        def factor(self):
+            t = self.peek()
+            if t.type == TokenType.LPAREN:
+                self.consume()
+                v = self.expr()
+                self.consume(TokenType.RPAREN)
+                return v
+            elif t.type == TokenType.NUMBER or t.type == TokenType.ID:
+                return self.consume().value
+            raise RuntimeError("Unexpected token: " + str(t))
 
-    // ──────────────────────────────────────────────
-    // Main
-    // ──────────────────────────────────────────────
-    public static void main(String[] args) {
-        String SEP = "=".repeat(52);
+        def getCode(self):
+            sb = []
+            for entry in self.code:
+                sb.append(entry[0] + ") " + entry[1])
+            return "\n".join(sb).strip()
 
-        String[][] tests = {
-            { "Case 1 – Simple arithmetic assignment",
-              "A = S - F * 100" },
-            { "Case 2 – Unary minus with repeated sub-expression",
-              "a := b * -c + b * -c" },
-            { "Case 3 – if statement with simple condition",
-              "if (a < b) a = a - c;" },
-            { "Case 4 – if with compound condition + two body stmts",
-              "if (a < b + c) a = a - c; c = b * c;" },
-        };
+    # ──────────────────────────────────────────────
+    # Helper: generate TAC from source string
+    # ──────────────────────────────────────────────
+    @staticmethod
+    def generateTAC(source):
+        tokens = ThreeAddressCode.Lexer(source).tokenize()
+        gen    = ThreeAddressCode.Generator(tokens)
+        gen.parse()
+        return gen.getCode()
 
-        System.out.println("\n THREE ADDRESS CODE GENERATOR");
-        System.out.println(" Assignment No. 5 – Compiler Construction\n");
+    # ──────────────────────────────────────────────
+    # Main
+    # ──────────────────────────────────────────────
+    @staticmethod
+    def main():
+        SEP = "=" * 52
 
-        for (int i = 0; i < tests.length; i++) {
-            System.out.println(SEP);
-            System.out.printf(" Test %d: %s%n", i + 1, tests[i][0]);
-            System.out.println(SEP);
-            System.out.println(" Input  : " + tests[i][1]);
-            System.out.println(" Output :");
-            try {
-                System.out.println(generateTAC(tests[i][1]));
-            } catch (Exception e) {
-                System.out.println(" [ERROR] " + e.getMessage());
-            }
-            System.out.println();
-        }
+        tests = [
+            [ "Case 1 – Simple arithmetic assignment",
+              "A = S - F * 100" ],
+            [ "Case 2 – Unary minus with repeated sub-expression",
+              "a := b * -c + b * -c" ],
+            [ "Case 3 – if statement with simple condition",
+              "if (a < b) a = a - c;" ],
+            [ "Case 4 – if with compound condition + two body stmts",
+              "if (a < b + c) a = a - c; c = b * c;" ],
+        ]
 
-        // Interactive mode
-        System.out.println(SEP);
-        System.out.println(" Interactive Mode – enter your own expression");
-        System.out.println(" (type 'exit' to quit)");
-        System.out.println(SEP);
-        Scanner sc = new Scanner(System.in);
-        while (true) {
-            System.out.print("\n>> Enter expression: ");
-            if (!sc.hasNextLine()) break;
-            String line = sc.nextLine().trim();
-            if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit") || line.isEmpty()) {
-                System.out.println("Goodbye!");
-                break;
-            }
-            try {
-                System.out.println(generateTAC(line));
-            } catch (Exception e) {
-                System.out.println("[ERROR] " + e.getMessage());
-            }
-        }
-        sc.close();
-    }
-}
+        print("\n THREE ADDRESS CODE GENERATOR")
+        print(" Assignment No. 5 – Compiler Construction\n")
+
+        for i in range(len(tests)):
+            print(SEP)
+            print(" Test {}: {}".format(i + 1, tests[i][0]))
+            print(SEP)
+            print(" Input  : " + tests[i][1])
+            print(" Output :")
+            try:
+                print(ThreeAddressCode.generateTAC(tests[i][1]))
+            except Exception as e:
+                print(" [ERROR] " + str(e))
+            print()
+
+        # Interactive mode
+        print(SEP)
+        print(" Interactive Mode – enter your own expression")
+        print(" (type 'exit' to quit)")
+        print(SEP)
+        
+        while True:
+            try:
+                line = input("\n>> Enter expression: ").strip()
+                if not line:
+                    continue
+                if line.lower() in ["exit", "quit"]:
+                    print("Goodbye!")
+                    break
+                print(ThreeAddressCode.generateTAC(line))
+            except (EOFError, KeyboardInterrupt):
+                print("\nGoodbye!")
+                break
+            except Exception as e:
+                print("[ERROR] " + str(e))
+
+if __name__ == "__main__":
+    ThreeAddressCode.main()
+
 
 
 
