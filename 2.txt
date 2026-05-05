@@ -1,0 +1,627 @@
+#assembler.java
+
+import java.io.*;
+import java.util.*;
+
+/**
+ * Two-Pass Macro Processor
+ * Assignment No. 2 - LPCC
+ *
+ * Pass 1 : Definition Mode  - Processes macro definitions, builds MNT & MDT
+ * Pass 2 : Expansion Mode   - Handles macro calls, generates expanded code
+ *
+ * Supports:
+ *   - Simple macros (no parameters)
+ *   - Macros with parameters
+ *   - Nested macros (early expansion in MDT)
+ *   - Multiple macro definitions and calls
+ */
+public class assembler {
+
+    // ─────────────────────────────────────────────
+    //  DATA STRUCTURES
+    // ─────────────────────────────────────────────
+
+    /** MNT entry: macro name, parameter count, starting MDT index */
+    static class MNTEntry {
+        String name;
+        int paramCount;
+        int mdtIndex;   // 1-based index into MDT
+
+        MNTEntry(String name, int paramCount, int mdtIndex) {
+            this.name       = name;
+            this.paramCount = paramCount;
+            this.mdtIndex   = mdtIndex;
+        }
+    }
+
+    /** Formal-vs-positional parameter list for one macro */
+    static class FormalParamList {
+        String macroName;
+        // formal name  →  positional token  (e.g. "ARG" → "#1")
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+
+        FormalParamList(String macroName) {
+            this.macroName = macroName;
+        }
+    }
+
+    /** Actual-vs-positional parameter list for one macro call */
+    static class ActualParamList {
+        String macroName;
+        String callSite;          // e.g. "ADD1 5" – human-readable label
+        // positional token  →  actual value  (e.g. "#1" → "5")
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+
+        ActualParamList(String macroName, String callSite) {
+            this.macroName = macroName;
+            this.callSite  = callSite;
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    //  GLOBAL TABLES
+    // ─────────────────────────────────────────────
+
+    static List<MNTEntry>        mnt            = new ArrayList<>();
+    static List<String>          mdt            = new ArrayList<>();   // 1-based (index 0 unused)
+    static List<FormalParamList> formalLists    = new ArrayList<>();
+    static List<ActualParamList> actualLists    = new ArrayList<>();   // for nested (d=1,e=1) calls
+    static List<ActualParamList> allActualLists = new ArrayList<>();   // all calls (pass-2)
+    static List<String>          intermediateCode = new ArrayList<>();
+    static List<String>          expandedCode     = new ArrayList<>();
+
+    // ─────────────────────────────────────────────
+    //  ENTRY POINT
+    // ─────────────────────────────────────────────
+
+    public static void main(String[] args) throws IOException {
+        String inputFile = (args.length > 0) ? args[0] : "input.asm";
+
+        // Seed MDT index 0 as unused placeholder (MDT is 1-based)
+        mdt.add("-- UNUSED --");
+
+        System.out.println("=== Two-Pass Macro Processor ===\n");
+        System.out.println("Input file: " + inputFile);
+
+        // Read source lines (strip CR, trim)
+        List<String> sourceLines = readSource(inputFile);
+
+        // ── PASS 1 ──────────────────────────────
+        System.out.println("\n[PASS 1] Processing macro definitions...");
+        passOne(sourceLines);
+
+        // ── PASS 2 ──────────────────────────────
+        System.out.println("[PASS 2] Expanding macro calls...");
+        passTwo();
+
+        // ── WRITE OUTPUT FILES ──────────────────
+        writeMNT("MNT.txt");
+        writeMDT("MDT.txt");
+        writeFormalParams("FormalParams.txt");
+        writeActualParams("ActualParams.txt");
+        writeIntermediateCode("IntermediateCode.txt");
+        writeExpandedCode("ExpandedCode.txt");
+
+        // ── CONSOLE SUMMARY ─────────────────────
+        printSummary();
+
+        System.out.println("\nAll output files written successfully.");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  PASS 1  –  Definition Mode
+    // ═══════════════════════════════════════════════════════════════
+
+    static void passOne(List<String> source) {
+        int d = 0;   // definition flag
+        int e = 0;   // expansion flag (nested call inside definition)
+
+        // Pointer into source for the current definition being built
+        // We process line by line; nested expansion is done inline (early expansion).
+
+        // To support early expansion we need a stack-like approach.
+        // We'll process the source list with an index pointer.
+        int i = 0;
+        while (i < source.size()) {
+            String rawLine = source.get(i).trim();
+            i++;
+
+            if (rawLine.isEmpty() || rawLine.startsWith(";")) {
+                // comment / blank – pass through to intermediate if not in def mode
+                if (d == 0 && e == 0) intermediateCode.add(rawLine);
+                continue;
+            }
+
+            String[] tokens = tokenize(rawLine);
+            String first    = tokens[0].toUpperCase();
+
+            // ────── Case d=0, e=0 ──────────────────────────────────
+            if (d == 0 && e == 0) {
+                if (first.equals("MACRO")) {
+                    d = 1;
+                    // Parse macro header:  MACRO <name> [p1,p2,...]
+                    processDefinitionHeader(tokens);
+                    // Stay in d=1,e=0 for subsequent lines
+                } else if (first.equals("END")) {
+                    intermediateCode.add(rawLine);
+                    break;
+                } else if (isMacroCall(first)) {
+                    // Macro call in normal code – record in intermediate code
+                    intermediateCode.add(rawLine);
+                    e = 0; // expansion happens in pass 2
+                } else {
+                    intermediateCode.add(rawLine);
+                }
+                continue;
+            }
+
+            // ────── Case d=1, e=0 ──────────────────────────────────
+            if (d == 1 && e == 0) {
+                if (first.equals("MEND")) {
+                    // End of current macro definition
+                    mdt.add("MEND");
+                    d = 0;
+                } else if (first.equals("MACRO")) {
+                    // Nested macro definition starts  (not in scope of this assignment,
+                    // but handled gracefully)
+                    d = 1;
+                    processDefinitionHeader(tokens);
+                } else if (isMacroCall(first)) {
+                    // ── Early Expansion: macro call inside definition ──
+                    // d=1, e=1
+                    e = 1;
+                    // Build actual-vs-positional list for this nested call
+                    // (using formal params of the ENCLOSING macro as actuals)
+                    MNTEntry callee = findMNT(first);
+                    if (callee == null) {
+                        System.err.println("  ERROR: Call to undefined macro '" + first + "' inside definition.");
+                    } else {
+                        // Expand the nested call body directly into MDT (early expansion)
+                        ActualParamList ala = buildNestedActualList(tokens, callee);
+                        actualLists.add(ala);  // nested ALA
+                        earlyExpand(callee, ala);
+                    }
+                    e = 0; // back to d=1,e=0 after early expansion
+                } else {
+                    // Normal body instruction – add to MDT with param substitution
+                    String mdtLine = substituteFormals(rawLine, currentFormal());
+                    mdt.add(mdtLine);
+                }
+                continue;
+            }
+        }
+    }
+
+    // ─── Process MACRO header line ────────────────────────────────────────────
+
+    static void processDefinitionHeader(String[] tokens) {
+        // tokens[0] = "MACRO", tokens[1] = macroName, tokens[2..] = params (may be comma-joined)
+        if (tokens.length < 2) {
+            System.err.println("  ERROR: Malformed MACRO header.");
+            return;
+        }
+        String macroName = tokens[1].toUpperCase();
+
+        // Check duplicate
+        if (findMNT(macroName) != null) {
+            System.err.println("  ERROR: Duplicate macro definition '" + macroName + "'.");
+            return;
+        }
+
+        // Collect formal parameter names
+        List<String> formals = new ArrayList<>();
+        if (tokens.length > 2) {
+            // Parameters may be comma-separated in one token or spread across several
+            StringBuilder paramStr = new StringBuilder();
+            for (int k = 2; k < tokens.length; k++) {
+                paramStr.append(tokens[k]);
+            }
+            String[] parts = paramStr.toString().split(",");
+            for (String p : parts) {
+                String pTrim = p.trim();
+                if (!pTrim.isEmpty()) formals.add(pTrim.toUpperCase());
+            }
+        }
+
+        // MNT entry
+        int mdtStart = mdt.size(); // next available 1-based index
+        mnt.add(new MNTEntry(macroName, formals.size(), mdtStart));
+
+        // Formal parameter list
+        FormalParamList fpl = new FormalParamList(macroName);
+        for (int k = 0; k < formals.size(); k++) {
+            fpl.params.put(formals.get(k), "#" + (k + 1));
+        }
+        formalLists.add(fpl);
+
+        System.out.println("  Defined macro: " + macroName +
+                " | params=" + formals.size() +
+                " | MDT start=" + mdtStart);
+    }
+
+    // ─── Early expansion of nested macro call inside MDT ─────────────────────
+
+    static void earlyExpand(MNTEntry callee, ActualParamList ala) {
+        // Walk callee's MDT body and substitute actuals, writing lines into
+        // the CURRENT macro's MDT body (i.e. into mdt at current MDTP).
+        int start = callee.mdtIndex;
+        for (int j = start; j < mdt.size(); j++) {
+            String line = mdt.get(j);
+            if (line.equals("MEND")) break;
+            // Replace positional params (#1, #2 …) with actual values from ALA
+            String expanded = applyActuals(line, ala);
+            mdt.add(expanded);
+        }
+    }
+
+    // ─── Substitute formal params in a body line → positional tokens ─────────
+
+    static String substituteFormals(String line, FormalParamList fpl) {
+        if (fpl == null) return line;
+        // Replace each formal name with its positional token (#N)
+        // We do whole-word replacement to avoid partial matches.
+        String result = line;
+        for (Map.Entry<String, String> entry : fpl.params.entrySet()) {
+            result = replaceWholeWord(result, entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+
+    // ─── Apply actual params (positional tokens → actual values) ─────────────
+
+    static String applyActuals(String line, ActualParamList ala) {
+        if (ala == null) return line;
+        String result = line;
+        for (Map.Entry<String, String> entry : ala.params.entrySet()) {
+            result = result.replace(entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+
+    // ─── Build nested ALA for a macro call inside a definition ───────────────
+    //  The "actuals" here are the formal params of the enclosing macro
+    //  expressed as their positional tokens.
+
+    static ActualParamList buildNestedActualList(String[] tokens, MNTEntry callee) {
+        // tokens[0] = callee name, tokens[1..] = arguments (may be comma-joined or literal)
+        ActualParamList ala = new ActualParamList(callee.name,
+                String.join(" ", tokens));
+
+        List<String> args = new ArrayList<>();
+        if (tokens.length > 1) {
+            StringBuilder argStr = new StringBuilder();
+            for (int k = 1; k < tokens.length; k++) {
+                argStr.append(tokens[k]);
+            }
+            String[] parts = argStr.toString().split(",");
+            for (String p : parts) {
+                String pTrim = p.trim();
+                if (!pTrim.isEmpty()) args.add(pTrim.toUpperCase());
+            }
+        }
+
+        // Map positional tokens of CALLEE to the argument values
+        // The argument values may themselves be formal params of the enclosing macro
+        // → look them up in the enclosing macro's formal list and map to #N tokens
+        FormalParamList enclosingFPL = currentFormal();
+        for (int k = 0; k < Math.min(args.size(), callee.paramCount); k++) {
+            String arg = args.get(k);
+            // If this arg is a formal param of the enclosing macro, replace with positional
+            if (enclosingFPL != null && enclosingFPL.params.containsKey(arg)) {
+                ala.params.put("#" + (k + 1), enclosingFPL.params.get(arg));
+            } else {
+                ala.params.put("#" + (k + 1), arg);
+            }
+        }
+        return ala;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  PASS 2  –  Expansion Mode
+    // ═══════════════════════════════════════════════════════════════
+
+    static void passTwo() {
+        for (String line : intermediateCode) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                expandedCode.add(line);
+                continue;
+            }
+            String[] tokens = tokenize(trimmed);
+            String first    = tokens[0].toUpperCase();
+
+            MNTEntry entry = findMNT(first);
+            if (entry != null) {
+                // Macro call – expand it
+                ActualParamList ala = buildCallActualList(tokens, entry);
+                allActualLists.add(ala);
+                expandMacroCall(entry, ala);
+            } else {
+                expandedCode.add(trimmed);
+            }
+        }
+    }
+
+    // ─── Build ALA for a normal macro call (pass 2) ──────────────────────────
+
+    static ActualParamList buildCallActualList(String[] tokens, MNTEntry entry) {
+        ActualParamList ala = new ActualParamList(entry.name,
+                String.join(" ", tokens));
+
+        List<String> args = new ArrayList<>();
+        if (tokens.length > 1) {
+            StringBuilder argStr = new StringBuilder();
+            for (int k = 1; k < tokens.length; k++) {
+                argStr.append(tokens[k]);
+            }
+            String[] parts = argStr.toString().split(",");
+            for (String p : parts) {
+                String pTrim = p.trim();
+                if (!pTrim.isEmpty()) args.add(pTrim);
+            }
+        }
+
+        for (int k = 0; k < Math.min(args.size(), entry.paramCount); k++) {
+            ala.params.put("#" + (k + 1), args.get(k));
+        }
+        return ala;
+    }
+
+    // ─── Expand a single macro call using MDT ────────────────────────────────
+
+    static void expandMacroCall(MNTEntry entry, ActualParamList ala) {
+        int start = entry.mdtIndex;
+        for (int j = start; j < mdt.size(); j++) {
+            String mdtLine = mdt.get(j);
+            if (mdtLine.equals("MEND")) break;
+            String expanded = applyActuals(mdtLine, ala);
+            expandedCode.add(expanded);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  OUTPUT WRITERS
+    // ═══════════════════════════════════════════════════════════════
+
+    static void writeMNT(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("MNT (Macro Name Table)");
+        pw.println("======================");
+        pw.printf("%-15s %-15s %-15s%n", "Macro Name", "No. of Params", "MDT Start Index");
+        pw.println("-".repeat(47));
+        for (MNTEntry e : mnt) {
+            pw.printf("%-15s %-15d %-15d%n", e.name, e.paramCount, e.mdtIndex);
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    static void writeMDT(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("MDT (Macro Definition Table) - with Early Expansion of Nested Calls");
+        pw.println("=====================================================================");
+        pw.printf("%-8s %s%n", "Index", "Instruction");
+        pw.println("-".repeat(40));
+        for (int i = 1; i < mdt.size(); i++) {
+            pw.printf("%-8d %s%n", i, mdt.get(i));
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    static void writeFormalParams(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("Formal vs Positional Parameter Lists");
+        pw.println("=====================================");
+        for (FormalParamList fpl : formalLists) {
+            pw.println("\nMacro: " + fpl.macroName);
+            pw.printf("  %-20s %-20s%n", "Formal Parameter", "Positional Parameter");
+            pw.println("  " + "-".repeat(42));
+            if (fpl.params.isEmpty()) {
+                pw.println("  (No parameters)");
+            } else {
+                for (Map.Entry<String, String> e : fpl.params.entrySet()) {
+                    pw.printf("  %-20s %-20s%n", e.getKey(), e.getValue());
+                }
+            }
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    static void writeActualParams(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("Actual vs Positional Parameter Lists");
+        pw.println("=====================================");
+        pw.println("(Includes nested macro call ALAs from Pass 1 and all call ALAs from Pass 2)");
+
+        List<ActualParamList> combined = new ArrayList<>();
+        combined.addAll(actualLists);   // nested
+        combined.addAll(allActualLists); // pass-2 calls
+
+        if (combined.isEmpty()) {
+            pw.println("\n(No macro calls found)");
+        }
+        for (ActualParamList ala : combined) {
+            pw.println("\nCall: " + ala.callSite + "  [Macro: " + ala.macroName + "]");
+            pw.printf("  %-20s %-20s%n", "Positional Parameter", "Actual Parameter");
+            pw.println("  " + "-".repeat(42));
+            if (ala.params.isEmpty()) {
+                pw.println("  (No parameters)");
+            } else {
+                for (Map.Entry<String, String> e : ala.params.entrySet()) {
+                    pw.printf("  %-20s %-20s%n", e.getKey(), e.getValue());
+                }
+            }
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    static void writeIntermediateCode(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("Intermediate Code (Output of Pass 1)");
+        pw.println("=====================================");
+        pw.println("(Macro definitions removed; macro calls retained as-is)");
+        pw.println();
+        for (int i = 0; i < intermediateCode.size(); i++) {
+            pw.printf("%-4d  %s%n", (i + 1), intermediateCode.get(i));
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    static void writeExpandedCode(String filename) throws IOException {
+        PrintWriter pw = new PrintWriter(new FileWriter(filename));
+        pw.println("Expanded Code (Output of Pass 2)");
+        pw.println("=================================");
+        pw.println("(All macro calls replaced by their expanded body)");
+        pw.println();
+        for (int i = 0; i < expandedCode.size(); i++) {
+            pw.printf("%-4d  %s%n", (i + 1), expandedCode.get(i));
+        }
+        pw.close();
+        System.out.println("  Written: " + filename);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  CONSOLE SUMMARY
+    // ═══════════════════════════════════════════════════════════════
+
+    static void printSummary() {
+        System.out.println("\n========================================");
+        System.out.println("           PROCESSING SUMMARY           ");
+        System.out.println("========================================");
+
+        System.out.println("\n--- MNT (Macro Name Table) ---");
+        System.out.printf("%-15s %-15s %-15s%n", "Name", "Params", "MDT Index");
+        System.out.println("-".repeat(47));
+        for (MNTEntry e : mnt)
+            System.out.printf("%-15s %-15d %-15d%n", e.name, e.paramCount, e.mdtIndex);
+
+        System.out.println("\n--- MDT (Macro Definition Table) [Early Expansion] ---");
+        System.out.printf("%-8s %s%n", "Index", "Instruction");
+        System.out.println("-".repeat(40));
+        for (int i = 1; i < mdt.size(); i++)
+            System.out.printf("%-8d %s%n", i, mdt.get(i));
+
+        System.out.println("\n--- Formal vs Positional Parameter Lists ---");
+        for (FormalParamList fpl : formalLists) {
+            System.out.println("  Macro: " + fpl.macroName);
+            if (fpl.params.isEmpty()) {
+                System.out.println("    (no params)");
+            } else {
+                System.out.printf("    %-20s %s%n", "Formal", "Positional");
+                for (Map.Entry<String, String> e : fpl.params.entrySet())
+                    System.out.printf("    %-20s %s%n", e.getKey(), e.getValue());
+            }
+        }
+
+        System.out.println("\n--- Actual vs Positional Parameter Lists ---");
+        List<ActualParamList> combined = new ArrayList<>(actualLists);
+        combined.addAll(allActualLists);
+        if (combined.isEmpty()) {
+            System.out.println("  (none)");
+        } else {
+            for (ActualParamList ala : combined) {
+                System.out.println("  Call: " + ala.callSite);
+                if (ala.params.isEmpty()) {
+                    System.out.println("    (no params)");
+                } else {
+                    System.out.printf("    %-20s %s%n", "Positional", "Actual");
+                    for (Map.Entry<String, String> e : ala.params.entrySet())
+                        System.out.printf("    %-20s %s%n", e.getKey(), e.getValue());
+                }
+            }
+        }
+
+        System.out.println("\n--- Intermediate Code ---");
+        for (int i = 0; i < intermediateCode.size(); i++)
+            System.out.printf("%-4d  %s%n", (i + 1), intermediateCode.get(i));
+
+        System.out.println("\n--- Expanded Code ---");
+        for (int i = 0; i < expandedCode.size(); i++)
+            System.out.printf("%-4d  %s%n", (i + 1), expandedCode.get(i));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  HELPERS
+    // ═══════════════════════════════════════════════════════════════
+
+    /** Read source file, strip CR, ignore blank-only lines at edges */
+    static List<String> readSource(String filename) throws IOException {
+        List<String> lines = new ArrayList<>();
+        BufferedReader br = new BufferedReader(new FileReader(filename));
+        String line;
+        while ((line = br.readLine()) != null) {
+            lines.add(line.replace("\r", ""));
+        }
+        br.close();
+        return lines;
+    }
+
+    /** Split a line into tokens; treat commas as delimiters alongside spaces */
+    static String[] tokenize(String line) {
+        // First split by spaces, then any resulting token may still have commas
+        // e.g. "ADD5 A1,A2,A3" → ["ADD5", "A1,A2,A3"]
+        // We keep them together so the caller can split on commas when needed.
+        return line.trim().split("\\s+");
+    }
+
+    /** Look up a macro name in MNT (case-insensitive) */
+    static MNTEntry findMNT(String name) {
+        for (MNTEntry e : mnt)
+            if (e.name.equalsIgnoreCase(name)) return e;
+        return null;
+    }
+
+    /** True if token matches any macro name defined so far */
+    static boolean isMacroCall(String token) {
+        return findMNT(token) != null;
+    }
+
+    /** Return the formal parameter list for the most recently defined macro */
+    static FormalParamList currentFormal() {
+        if (formalLists.isEmpty()) return null;
+        return formalLists.get(formalLists.size() - 1);
+    }
+
+    /**
+     * Replace whole-word occurrences of `target` with `replacement` in `text`.
+     * Handles cases like "STORE ARG" → "STORE #1" without matching "LARGER".
+     */
+    static String replaceWholeWord(String text, String target, String replacement) {
+        // Use word-boundary regex; escape special regex chars in target
+        String escaped = target.replaceAll("([\\[\\]{}()*+?.\\\\^$|])", "\\\\$1");
+        return text.replaceAll("(?<![A-Za-z0-9_#])" + escaped + "(?![A-Za-z0-9_])",
+                replacement);
+    }
+}
+
+
+
+
+
+#input.asm
+
+LOAD A
+STORE B
+MACRO ABC
+    LOAD p
+    SUB q
+MEND
+MACRO ADD1 ARG
+    LOAD X
+    STORE ARG
+MEND
+MACRO ADD5 A1,A2,A3
+    STORE A2
+    ADD1 5
+    ADD1 10
+    LOAD A1
+    LOAD A3
+MEND
+ABC
+ADD5 D1,D2,D3
+END

@@ -1,0 +1,333 @@
+#ThreeAddressCode.java
+
+import java.util.*;
+
+/**
+ * Three Address Code (TAC) Generator
+ * Assignment No. 5 - Language Processors and Compiler Construction
+ * Supports: arithmetic expressions and if-statements
+ */
+public class ThreeAddressCode {
+
+    // ──────────────────────────────────────────────
+    // Token Types
+    // ──────────────────────────────────────────────
+    enum TokenType {
+        NUMBER, ID, ASSIGN, RELOP, PLUS, MINUS, MUL, DIV,
+        LPAREN, RPAREN, SEMI, EOF
+    }
+
+    static class Token {
+        TokenType type;
+        String    value;
+        Token(TokenType type, String value) {
+            this.type  = type;
+            this.value = value;
+        }
+        public String toString() { return "(" + type + ", " + value + ")"; }
+    }
+
+    // ──────────────────────────────────────────────
+    // Lexer
+    // ──────────────────────────────────────────────
+    static class Lexer {
+        private final String   input;
+        private       int      pos = 0;
+
+        Lexer(String input) { this.input = input.trim(); }
+
+        private char peek() {
+            return pos < input.length() ? input.charAt(pos) : '\0';
+        }
+        private char advance() { return input.charAt(pos++); }
+
+        List<Token> tokenize() {
+            List<Token> tokens = new ArrayList<>();
+            while (pos < input.length()) {
+                char c = peek();
+                if (Character.isWhitespace(c)) { advance(); continue; }
+
+                if (Character.isDigit(c)) {
+                    StringBuilder sb = new StringBuilder();
+                    while (pos < input.length() && (Character.isDigit(peek()) || peek() == '.'))
+                        sb.append(advance());
+                    tokens.add(new Token(TokenType.NUMBER, sb.toString()));
+                    continue;
+                }
+                if (Character.isLetter(c) || c == '_') {
+                    StringBuilder sb = new StringBuilder();
+                    while (pos < input.length() && (Character.isLetterOrDigit(peek()) || peek() == '_'))
+                        sb.append(advance());
+                    tokens.add(new Token(TokenType.ID, sb.toString()));
+                    continue;
+                }
+                // Two-char operators
+                if (pos + 1 < input.length()) {
+                    String two = "" + c + input.charAt(pos + 1);
+                    if (two.equals(":=")) { pos += 2; tokens.add(new Token(TokenType.ASSIGN, ":=")); continue; }
+                    if (two.equals("<=") || two.equals(">=") || two.equals("==") || two.equals("!=")) {
+                        pos += 2; tokens.add(new Token(TokenType.RELOP, two)); continue;
+                    }
+                }
+                // Single-char
+                advance();
+                switch (c) {
+                    case '=': tokens.add(new Token(TokenType.ASSIGN, "=")); break;
+                    case '<': tokens.add(new Token(TokenType.RELOP,  "<")); break;
+                    case '>': tokens.add(new Token(TokenType.RELOP,  ">")); break;
+                    case '+': tokens.add(new Token(TokenType.PLUS,   "+")); break;
+                    case '-': tokens.add(new Token(TokenType.MINUS,  "-")); break;
+                    case '*': tokens.add(new Token(TokenType.MUL,    "*")); break;
+                    case '/': tokens.add(new Token(TokenType.DIV,    "/")); break;
+                    case '(': tokens.add(new Token(TokenType.LPAREN, "(")); break;
+                    case ')': tokens.add(new Token(TokenType.RPAREN, ")")); break;
+                    case ';': tokens.add(new Token(TokenType.SEMI,   ";")); break;
+                    default : throw new RuntimeException("Unexpected character: " + c);
+                }
+            }
+            tokens.add(new Token(TokenType.EOF, ""));
+            return tokens;
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // TAC Generator (Recursive-Descent Parser)
+    // ──────────────────────────────────────────────
+    static class Generator {
+        private final List<Token>  tokens;
+        private       int          pos    = 0;
+        private       int          tempCnt = 0;
+        private       int          lineNo  = 1;
+
+        // Each entry: [lineNumber, instruction]
+        private final List<String[]> code = new ArrayList<>();
+
+        Generator(List<Token> tokens) { this.tokens = tokens; }
+
+        // ── helpers ──────────────────────────────
+        private String newTemp() { return "t" + (++tempCnt); }
+
+        private Token peek() { return tokens.get(pos); }
+
+        private Token consume() { return tokens.get(pos++); }
+
+        private Token consume(TokenType expected) {
+            Token t = tokens.get(pos++);
+            if (t.type != expected)
+                throw new RuntimeException("Expected " + expected + " but got " + t);
+            return t;
+        }
+
+        private void emit(String instr) {
+            code.add(new String[]{ String.valueOf(lineNo++), instr });
+        }
+
+        // Returns index into code list (before emit)
+        private int nextIndex() { return code.size(); }
+
+        // Patch a previously emitted instruction
+        private void patch(int idx, String newInstr) {
+            code.get(idx)[1] = newInstr;
+        }
+
+        // ── parse entry ──────────────────────────
+        void parse() {
+            while (peek().type != TokenType.EOF)
+                statement();
+        }
+
+        private void statement() {
+            Token t = peek();
+            if (t.type == TokenType.ID && t.value.equals("if"))
+                ifStmt();
+            else
+                assignStmt();
+        }
+
+        // if '(' expr ')' assignStmt (';' assignStmt)*
+        private void ifStmt() {
+            consume(); // 'if'
+            consume(TokenType.LPAREN);
+            String cond = expr();
+            consume(TokenType.RPAREN);
+
+            int trueIdx  = nextIndex();
+            emit("if " + cond + " goto (?)");   // placeholder
+            int falseIdx = nextIndex();
+            emit("goto (?)");                    // placeholder
+
+            int trueStart = lineNo;
+            assignStmt();
+            while (peek().type == TokenType.SEMI) {
+                consume(); // ';'
+                // check if next is an assignment
+                if (peek().type == TokenType.ID) {
+                    int saved = pos;
+                    consume(); // ID
+                    boolean isAssign = peek().type == TokenType.ASSIGN;
+                    pos = saved;
+                    if (isAssign) assignStmt();
+                }
+            }
+
+            int afterLine = lineNo;
+            patch(trueIdx,  "if " + cond + " goto (" + trueStart + ")");
+            patch(falseIdx, "goto (" + afterLine + ")");
+        }
+
+        // ID ('='|':=') expr ';'?
+        private void assignStmt() {
+            String lhs = consume(TokenType.ID).value;
+            consume(TokenType.ASSIGN);
+            String rhs = expr();
+            if (peek().type == TokenType.SEMI) consume();
+            emit(lhs + " = " + rhs);
+        }
+
+        // additive (RELOP additive)?
+        private String expr() {
+            String left = additive();
+            if (peek().type == TokenType.RELOP) {
+                String op    = consume().value;
+                String right = additive();
+                String t     = newTemp();
+                emit(t + " = " + left + " " + op + " " + right);
+                left = t;
+            }
+            return left;
+        }
+
+        // term (('+' | '-') term)*
+        private String additive() {
+            String left = term();
+            while (peek().type == TokenType.PLUS || peek().type == TokenType.MINUS) {
+                String op    = consume().value;
+                String right = term();
+                String t     = newTemp();
+                emit(t + " = " + left + " " + op + " " + right);
+                left = t;
+            }
+            return left;
+        }
+
+        // unary (('*' | '/') unary)*
+        private String term() {
+            String left = unary();
+            while (peek().type == TokenType.MUL || peek().type == TokenType.DIV) {
+                String op    = consume().value;
+                String right = unary();
+                String t     = newTemp();
+                emit(t + " = " + left + " " + op + " " + right);
+                left = t;
+            }
+            return left;
+        }
+
+        // '-' unary | factor
+        private String unary() {
+            if (peek().type == TokenType.MINUS) {
+                consume();
+                String operand = unary();
+                String t = newTemp();
+                emit(t + " = - " + operand);
+                return t;
+            }
+            return factor();
+        }
+
+        // '(' expr ')' | NUMBER | ID
+        private String factor() {
+            Token t = peek();
+            if (t.type == TokenType.LPAREN) {
+                consume();
+                String v = expr();
+                consume(TokenType.RPAREN);
+                return v;
+            } else if (t.type == TokenType.NUMBER || t.type == TokenType.ID) {
+                return consume().value;
+            }
+            throw new RuntimeException("Unexpected token: " + t);
+        }
+
+        String getCode() {
+            StringBuilder sb = new StringBuilder();
+            for (String[] entry : code)
+                sb.append(entry[0]).append(") ").append(entry[1]).append("\n");
+            return sb.toString().trim();
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // Helper: generate TAC from source string
+    // ──────────────────────────────────────────────
+    static String generateTAC(String source) {
+        List<Token> tokens = new Lexer(source).tokenize();
+        Generator   gen    = new Generator(tokens);
+        gen.parse();
+        return gen.getCode();
+    }
+
+    // ──────────────────────────────────────────────
+    // Main
+    // ──────────────────────────────────────────────
+    public static void main(String[] args) {
+        String SEP = "=".repeat(52);
+
+        String[][] tests = {
+            { "Case 1 – Simple arithmetic assignment",
+              "A = S - F * 100" },
+            { "Case 2 – Unary minus with repeated sub-expression",
+              "a := b * -c + b * -c" },
+            { "Case 3 – if statement with simple condition",
+              "if (a < b) a = a - c;" },
+            { "Case 4 – if with compound condition + two body stmts",
+              "if (a < b + c) a = a - c; c = b * c;" },
+        };
+
+        System.out.println("\n THREE ADDRESS CODE GENERATOR");
+        System.out.println(" Assignment No. 5 – Compiler Construction\n");
+
+        for (int i = 0; i < tests.length; i++) {
+            System.out.println(SEP);
+            System.out.printf(" Test %d: %s%n", i + 1, tests[i][0]);
+            System.out.println(SEP);
+            System.out.println(" Input  : " + tests[i][1]);
+            System.out.println(" Output :");
+            try {
+                System.out.println(generateTAC(tests[i][1]));
+            } catch (Exception e) {
+                System.out.println(" [ERROR] " + e.getMessage());
+            }
+            System.out.println();
+        }
+
+        // Interactive mode
+        System.out.println(SEP);
+        System.out.println(" Interactive Mode – enter your own expression");
+        System.out.println(" (type 'exit' to quit)");
+        System.out.println(SEP);
+        Scanner sc = new Scanner(System.in);
+        while (true) {
+            System.out.print("\n>> Enter expression: ");
+            if (!sc.hasNextLine()) break;
+            String line = sc.nextLine().trim();
+            if (line.equalsIgnoreCase("exit") || line.equalsIgnoreCase("quit") || line.isEmpty()) {
+                System.out.println("Goodbye!");
+                break;
+            }
+            try {
+                System.out.println(generateTAC(line));
+            } catch (Exception e) {
+                System.out.println("[ERROR] " + e.getMessage());
+            }
+        }
+        sc.close();
+    }
+}
+
+
+
+#input.txt
+
+if (a < b) a = a - c;
+x = a + b * c

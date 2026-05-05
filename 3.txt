@@ -1,0 +1,466 @@
+#3a.l
+
+/* ============================================================
+   Assignment 3a: Lexical Analyzer for Parts of Speech
+   (Subset of English Language) — WITHOUT Symbol Table
+   Tool: LEX (flex)
+   Compile: flex 3a_english_no_symtable.l && gcc lex.yy.c -lfl -o eng_no_sym
+   Run:     ./eng_no_sym
+   ============================================================ */
+
+%{
+#include <stdio.h>
+#include <string.h>
+
+int noun_count = 0, pronoun_count = 0, verb_count = 0;
+int adj_count  = 0, adv_count   = 0, prep_count = 0;
+int conj_count = 0, interj_count = 0, unknown_count = 0;
+%}
+
+/* ── token definitions ── */
+NOUN        car|house|man|state|ocean|country|city
+PRONOUN     [Ss]he|[Hh]e|[Ww]e|[Tt]hey|[Ii]t
+VERB        [Cc]ome|[Gg]o|[Ww]alk|[Dd]id|[Hh]ave|[Rr]ead|[Ww]rite
+ADJECTIVE   [Pp]retty|[Oo]ld|[Bb]lue|[Ss]mart
+ADVERB      abnormally|accidentally|actually|beautifully|bitterly|brightly|calmly
+PREPOSITION [Bb]y|[Ww]ith|[Aa]bout|[Uu]ntil
+CONJUNCTION [Aa]nd|[Bb]ut|[Oo]r|[Ww]hile|[Bb]ecause
+INTERJECTION Oh"!"|Wow"!"|Oops"!"
+
+%%
+
+{NOUN}          { printf("%-20s  ->  NOUN\n",        yytext); noun_count++;   }
+{PRONOUN}       { printf("%-20s  ->  PRONOUN\n",     yytext); pronoun_count++; }
+{VERB}          { printf("%-20s  ->  VERB\n",        yytext); verb_count++;   }
+{ADJECTIVE}     { printf("%-20s  ->  ADJECTIVE\n",   yytext); adj_count++;    }
+{ADVERB}        { printf("%-20s  ->  ADVERB\n",      yytext); adv_count++;    }
+{PREPOSITION}   { printf("%-20s  ->  PREPOSITION\n", yytext); prep_count++;   }
+{CONJUNCTION}   { printf("%-20s  ->  CONJUNCTION\n", yytext); conj_count++;   }
+{INTERJECTION}  { printf("%-20s  ->  INTERJECTION\n",yytext); interj_count++; }
+
+[ \t\n]+        { /* skip whitespace */ }
+[a-zA-Z!]+      { printf("%-20s  ->  UNKNOWN\n",     yytext); unknown_count++; }
+
+%%
+
+int yywrap() { return 1; }
+
+int main() {
+    printf("\n=== Lexical Analyzer: Parts of Speech (No Symbol Table) ===\n");
+    printf("Enter text (Ctrl+D / Ctrl+Z to end):\n\n");
+
+    yylex();
+
+    printf("\n============== SUMMARY ==============\n");
+    printf("  Nouns        : %d\n", noun_count);
+    printf("  Pronouns     : %d\n", pronoun_count);
+    printf("  Verbs        : %d\n", verb_count);
+    printf("  Adjectives   : %d\n", adj_count);
+    printf("  Adverbs      : %d\n", adv_count);
+    printf("  Prepositions : %d\n", prep_count);
+    printf("  Conjunctions : %d\n", conj_count);
+    printf("  Interjections: %d\n", interj_count);
+    printf("  Unknown      : %d\n", unknown_count);
+    printf("=====================================\n");
+    return 0;
+}
+
+
+
+
+#3b.l
+
+/* ============================================================
+   Assignment 3b: Lexical Analyzer for Parts of Speech
+   (Subset of English Language) — WITH Symbol Table
+   Tool: LEX (flex)
+   Compile: flex 3b_english_with_symtable.l && gcc lex.yy.c -lfl -o eng_sym
+   Run:     ./eng_sym
+   ============================================================ */
+
+%{
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* ── Symbol Table ── */
+#define MAX_SYMBOLS 200
+#define MAX_LEN     50
+
+typedef struct {
+    char lexeme[MAX_LEN];
+    char pos[20];       /* part of speech */
+    int  line;
+} Symbol;
+
+Symbol symtable[MAX_SYMBOLS];
+int    sym_count = 0;
+int    line_no   = 1;
+
+/* Insert a new entry (skip duplicates) */
+void insert_symbol(const char *lexeme, const char *pos) {
+    for (int i = 0; i < sym_count; i++)
+        if (strcmp(symtable[i].lexeme, lexeme) == 0) return; /* duplicate */
+    if (sym_count >= MAX_SYMBOLS) { fprintf(stderr,"Symbol table full!\n"); return; }
+    strncpy(symtable[sym_count].lexeme, lexeme, MAX_LEN - 1);
+    strncpy(symtable[sym_count].pos,    pos,    19);
+    symtable[sym_count].line = line_no;
+    sym_count++;
+}
+
+void print_symbol_table() {
+    printf("\n╔══════════════════════════════════════════════════════╗\n");
+    printf("║              SYMBOL TABLE                            ║\n");
+    printf("╠══════╦══════════════════════╦═══════════════╦════════╣\n");
+    printf("║  #   ║  Lexeme              ║  Part of Spch ║  Line  ║\n");
+    printf("╠══════╬══════════════════════╬═══════════════╬════════╣\n");
+    for (int i = 0; i < sym_count; i++)
+        printf("║ %4d ║ %-20s ║ %-13s ║ %6d ║\n",
+               i+1, symtable[i].lexeme, symtable[i].pos, symtable[i].line);
+    printf("╚══════╩══════════════════════╩═══════════════╩════════╝\n");
+}
+%}
+
+NOUN        car|house|man|state|ocean|country|city
+PRONOUN     [Ss]he|[Hh]e|[Ww]e|[Tt]hey|[Ii]t
+VERB        [Cc]ome|[Gg]o|[Ww]alk|[Dd]id|[Hh]ave|[Rr]ead|[Ww]rite
+ADJECTIVE   [Pp]retty|[Oo]ld|[Bb]lue|[Ss]mart
+ADVERB      abnormally|accidentally|actually|beautifully|bitterly|brightly|calmly
+PREPOSITION [Bb]y|[Ww]ith|[Aa]bout|[Uu]ntil
+CONJUNCTION [Aa]nd|[Bb]ut|[Oo]r|[Ww]hile|[Bb]ecause
+INTERJECTION Oh"!"|Wow"!"|Oops"!"
+
+%%
+
+\n              { line_no++; }
+
+{NOUN}          { printf("Token: %-20s POS: NOUN\n",         yytext);
+                  insert_symbol(yytext, "NOUN"); }
+
+{PRONOUN}       { printf("Token: %-20s POS: PRONOUN\n",      yytext);
+                  insert_symbol(yytext, "PRONOUN"); }
+
+{VERB}          { printf("Token: %-20s POS: VERB\n",         yytext);
+                  insert_symbol(yytext, "VERB"); }
+
+{ADJECTIVE}     { printf("Token: %-20s POS: ADJECTIVE\n",    yytext);
+                  insert_symbol(yytext, "ADJECTIVE"); }
+
+{ADVERB}        { printf("Token: %-20s POS: ADVERB\n",       yytext);
+                  insert_symbol(yytext, "ADVERB"); }
+
+{PREPOSITION}   { printf("Token: %-20s POS: PREPOSITION\n",  yytext);
+                  insert_symbol(yytext, "PREPOSITION"); }
+
+{CONJUNCTION}   { printf("Token: %-20s POS: CONJUNCTION\n",  yytext);
+                  insert_symbol(yytext, "CONJUNCTION"); }
+
+{INTERJECTION}  { printf("Token: %-20s POS: INTERJECTION\n", yytext);
+                  insert_symbol(yytext, "INTERJECTION"); }
+
+[ \t]+          { /* skip spaces/tabs */ }
+[a-zA-Z!]+      { printf("Token: %-20s POS: UNKNOWN\n",      yytext);
+                  insert_symbol(yytext, "UNKNOWN"); }
+
+%%
+
+int yywrap() { return 1; }
+
+int main() {
+    printf("\n=== Lexical Analyzer: Parts of Speech (WITH Symbol Table) ===\n");
+    printf("Enter text (Ctrl+D / Ctrl+Z to end):\n\n");
+
+    yylex();
+
+    print_symbol_table();
+    printf("\nTotal unique tokens in symbol table: %d\n", sym_count);
+    return 0;
+}
+
+
+
+
+#3c.l
+
+/* ============================================================
+   Assignment 3c: Lexical Analyzer for Subset of C Language
+   WITHOUT Symbol Table
+   Tool: LEX (flex)
+   Compile: flex 3c_clang_no_symtable.l && gcc lex.yy.c -lfl -o c_no_sym
+   Run:     ./c_no_sym < input.c
+            OR  ./c_no_sym   (then type C code, Ctrl+D to end)
+   ============================================================ */
+
+%{
+#include <stdio.h>
+
+int kw_count    = 0;
+int id_count    = 0;
+int int_count   = 0;
+int float_count = 0;
+int op_count    = 0;
+int punct_count = 0;
+int fmt_count   = 0;
+int str_count   = 0;
+%}
+
+/* ── definitions ── */
+DIGIT       [0-9]
+LETTER      [a-zA-Z_]
+ID          {LETTER}({LETTER}|{DIGIT})*
+INT_NUM     {DIGIT}+
+FLOAT_NUM   {DIGIT}+"."{DIGIT}+
+
+KEYWORD     if|else|while|for|int|float|char|void|return|printf|scanf|include|main
+
+ARITH_OP    "+"|"-"|"*"|"/"|"%"
+LOGIC_OP    "&&"|"||"
+REL_OP      "<="|">="|"=="|"!="|"<"|">"
+ASSIGN_OP   "="
+
+FMT_SPEC    "%d"|"%c"|"%s"|"%f"|"%i"|"%ld"
+
+STRING      \"[^\"]*\"
+
+%%
+
+{KEYWORD}   { printf("%-20s  ->  KEYWORD\n",          yytext); kw_count++;    }
+{FLOAT_NUM} { printf("%-20s  ->  FLOAT NUMBER\n",     yytext); float_count++; }
+{INT_NUM}   { printf("%-20s  ->  INTEGER NUMBER\n",   yytext); int_count++;   }
+{FMT_SPEC}  { printf("%-20s  ->  FORMAT SPECIFIER\n", yytext); fmt_count++;   }
+{ID}        { printf("%-20s  ->  IDENTIFIER\n",       yytext); id_count++;    }
+
+{ARITH_OP}  { printf("%-20s  ->  ARITHMETIC OPERATOR\n", yytext); op_count++; }
+{LOGIC_OP}  { printf("%-20s  ->  LOGICAL OPERATOR\n",    yytext); op_count++; }
+{REL_OP}    { printf("%-20s  ->  RELATIONAL OPERATOR\n", yytext); op_count++; }
+{ASSIGN_OP} { printf("%-20s  ->  ASSIGNMENT OPERATOR\n", yytext); op_count++; }
+
+{STRING}    { printf("%-20s  ->  STRING LITERAL\n",   yytext); str_count++;   }
+
+"#"         { printf("%-20s  ->  PREPROCESSOR (#)\n", yytext); punct_count++; }
+"["         { printf("%-20s  ->  LEFT BRACKET\n",     yytext); punct_count++; }
+"]"         { printf("%-20s  ->  RIGHT BRACKET\n",    yytext); punct_count++; }
+"("         { printf("%-20s  ->  LEFT PAREN\n",       yytext); punct_count++; }
+")"         { printf("%-20s  ->  RIGHT PAREN\n",      yytext); punct_count++; }
+"{"         { printf("%-20s  ->  LEFT BRACE\n",       yytext); punct_count++; }
+"}"         { printf("%-20s  ->  RIGHT BRACE\n",      yytext); punct_count++; }
+";"         { printf("%-20s  ->  SEMICOLON\n",        yytext); punct_count++; }
+","         { printf("%-20s  ->  COMMA\n",            yytext); punct_count++; }
+
+[ \t\n]+    { /* skip whitespace */ }
+.           { printf("%-20s  ->  UNKNOWN CHARACTER\n", yytext); }
+
+%%
+
+int yywrap() { return 1; }
+
+int main() {
+    printf("\n=== Lexical Analyzer: C Language (No Symbol Table) ===\n");
+    printf("Enter/pipe C source code (Ctrl+D to end):\n\n");
+
+    yylex();
+
+    printf("\n============== TOKEN SUMMARY ==============\n");
+    printf("  Keywords           : %d\n", kw_count);
+    printf("  Identifiers        : %d\n", id_count);
+    printf("  Integer Numbers    : %d\n", int_count);
+    printf("  Float Numbers      : %d\n", float_count);
+    printf("  Operators          : %d\n", op_count);
+    printf("  Punctuation Symbols: %d\n", punct_count);
+    printf("  Format Specifiers  : %d\n", fmt_count);
+    printf("  String Literals    : %d\n", str_count);
+    printf("===========================================\n");
+    return 0;
+}
+
+
+
+
+#3d.l
+
+/* ============================================================
+   Assignment 3d: Lexical Analyzer for Subset of C Language
+   WITH Symbol Table
+   Tool: LEX (flex)
+   Compile: flex 3d_clang_with_symtable.l && gcc lex.yy.c -lfl -o c_sym
+   Run:     ./c_sym < input.c
+            OR  ./c_sym   (then type C code, Ctrl+D to end)
+   ============================================================ */
+
+%{
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* ─────────────────────────────────────────
+   Symbol Table Implementation
+   ───────────────────────────────────────── */
+#define MAX_SYM  300
+#define MAX_LEX   64
+#define MAX_TYPE  30
+
+typedef struct {
+    char lexeme[MAX_LEX];
+    char token_type[MAX_TYPE];
+    int  line_no;
+} SymbolEntry;
+
+SymbolEntry sym_table[MAX_SYM];
+int sym_count = 0;
+int line_no   = 1;
+
+/* Lookup: returns index if found, -1 otherwise */
+int lookup(const char *lex) {
+    for (int i = 0; i < sym_count; i++)
+        if (strcmp(sym_table[i].lexeme, lex) == 0)
+            return i;
+    return -1;
+}
+
+/* Insert (skip duplicates) */
+void insert(const char *lex, const char *type) {
+    if (lookup(lex) != -1) return;          /* already present */
+    if (sym_count >= MAX_SYM) {
+        fprintf(stderr, "ERROR: Symbol table overflow!\n");
+        return;
+    }
+    strncpy(sym_table[sym_count].lexeme,     lex,  MAX_LEX  - 1);
+    strncpy(sym_table[sym_count].token_type, type, MAX_TYPE - 1);
+    sym_table[sym_count].line_no = line_no;
+    sym_count++;
+}
+
+void print_symbol_table() {
+    printf("\n╔══════════════════════════════════════════════════════════════╗\n");
+    printf("║                  SYMBOL TABLE (C Language)                   ║\n");
+    printf("╠══════╦═══════════════════════╦══════════════════════╦════════╣\n");
+    printf("║  #   ║  Lexeme               ║  Token Type          ║  Line  ║\n");
+    printf("╠══════╬═══════════════════════╬══════════════════════╬════════╣\n");
+    for (int i = 0; i < sym_count; i++)
+        printf("║ %4d ║ %-21s ║ %-20s ║ %6d ║\n",
+               i+1, sym_table[i].lexeme,
+                    sym_table[i].token_type,
+                    sym_table[i].line_no);
+    printf("╚══════╩═══════════════════════╩══════════════════════╩════════╝\n");
+    printf("  Total entries: %d\n", sym_count);
+}
+%}
+
+/* ── definitions ── */
+DIGIT       [0-9]
+LETTER      [a-zA-Z_]
+ID          {LETTER}({LETTER}|{DIGIT})*
+INT_NUM     {DIGIT}+
+FLOAT_NUM   {DIGIT}+"."{DIGIT}+
+
+KEYWORD     if|else|while|for|int|float|char|void|return|printf|scanf|include|main
+
+ARITH_OP    "+"|"-"|"*"|"/"|"%"
+LOGIC_OP    "&&"|"||"
+REL_OP      "<="|">="|"=="|"!="|"<"|">"
+ASSIGN_OP   "="
+
+FMT_SPEC    "%d"|"%c"|"%s"|"%f"|"%i"|"%ld"
+
+STRING      \"[^\"]*\"
+
+%%
+
+\n              { line_no++; }
+
+{KEYWORD}   {
+    printf("Token: %-20s  Type: KEYWORD\n", yytext);
+    insert(yytext, "KEYWORD");
+}
+
+{FLOAT_NUM} {
+    printf("Token: %-20s  Type: FLOAT\n", yytext);
+    insert(yytext, "FLOAT NUMBER");
+}
+
+{INT_NUM}   {
+    printf("Token: %-20s  Type: INTEGER\n", yytext);
+    insert(yytext, "INTEGER NUMBER");
+}
+
+{FMT_SPEC}  {
+    printf("Token: %-20s  Type: FORMAT SPECIFIER\n", yytext);
+    insert(yytext, "FORMAT SPECIFIER");
+}
+
+{ID}        {
+    printf("Token: %-20s  Type: IDENTIFIER\n", yytext);
+    insert(yytext, "IDENTIFIER");
+}
+
+{ARITH_OP}  {
+    printf("Token: %-20s  Type: ARITHMETIC OP\n", yytext);
+    insert(yytext, "ARITHMETIC OP");
+}
+
+{LOGIC_OP}  {
+    printf("Token: %-20s  Type: LOGICAL OP\n", yytext);
+    insert(yytext, "LOGICAL OP");
+}
+
+{REL_OP}    {
+    printf("Token: %-20s  Type: RELATIONAL OP\n", yytext);
+    insert(yytext, "RELATIONAL OP");
+}
+
+{ASSIGN_OP} {
+    printf("Token: %-20s  Type: ASSIGNMENT OP\n", yytext);
+    insert(yytext, "ASSIGNMENT OP");
+}
+
+{STRING}    {
+    printf("Token: %-20s  Type: STRING LITERAL\n", yytext);
+    insert(yytext, "STRING LITERAL");
+}
+
+"#"  { printf("Token: #                     Type: PREPROCESSOR\n");   insert("#",  "PREPROCESSOR");    }
+"["  { printf("Token: [                     Type: LEFT BRACKET\n");   insert("[",  "LEFT BRACKET");    }
+"]"  { printf("Token: ]                     Type: RIGHT BRACKET\n");  insert("]",  "RIGHT BRACKET");   }
+"("  { printf("Token: (                     Type: LEFT PAREN\n");     insert("(",  "LEFT PAREN");      }
+")"  { printf("Token: )                     Type: RIGHT PAREN\n");    insert(")",  "RIGHT PAREN");     }
+"{"  { printf("Token: {                     Type: LEFT BRACE\n");     insert("{",  "LEFT BRACE");      }
+"}"  { printf("Token: }                     Type: RIGHT BRACE\n");    insert("}",  "RIGHT BRACE");     }
+";"  { printf("Token: ;                     Type: SEMICOLON\n");      insert(";",  "SEMICOLON");       }
+","  { printf("Token: ,                     Type: COMMA\n");          insert(",",  "COMMA");           }
+
+[ \t]+  { /* skip spaces/tabs */ }
+.       { printf("Token: %-20s  Type: UNKNOWN\n", yytext); }
+
+%%
+
+int yywrap() { return 1; }
+
+int main() {
+    printf("\n=== Lexical Analyzer: C Language (WITH Symbol Table) ===\n");
+    printf("Enter/pipe C source code (Ctrl+D to end):\n\n");
+
+    yylex();
+
+    print_symbol_table();
+    return 0;
+}
+
+
+
+#run.txt
+
+flex 3a.l
+gcc lex.yy.c -lfl -o eng_no_sym
+./eng_no_sym
+
+flex 3b.l
+gcc lex.yy.c -lfl -o eng_sym
+./eng_sym
+
+flex 3c.l
+gcc lex.yy.c -lfl -o c_no_sym
+./c_no_sym < sample_input.c
+
+flex 3d.l
+gcc lex.yy.c -lfl -o c_sym
+./c_sym < sample_input.c
